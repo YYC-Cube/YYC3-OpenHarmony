@@ -3,11 +3,15 @@ name: Build HAP
 
 # Builds a HAP from an in-repo sample project on a self-hosted runner that has
 # the OpenHarmony toolchain installed. The runner must register the labels
-# `self-hosted` and `ohos` (Linux or macOS), and provide:
+# `self-hosted` and `ohos` (Windows, Linux or macOS), and provide:
 #   - JDK 17
-#   - HarmonyOS SDK API 18 with DEVECO_SDK_HOME exported
-#   - command-line-tools 5.1 (ohpm, hvigor, node on PATH)
+#   - OpenHarmony SDK API 20 with DEVECO_SDK_HOME (and optionally
+#     OHOS_BASE_SDK_HOME) exported
+#   - command-line-tools 5.1 (ohpm, hvigor, node, npm on PATH)
 #   - hdc on PATH
+# Note: on Windows the node/npm directory on PATH must come from an intact
+# Node.js installation; a `npm.cmd` shim that redirects to pnpm breaks both
+# `hvigorw` and the Flutter tool's hvigor plugin install.
 # Optional repository variables:
 #   PUB_HOSTED_URL, FLUTTER_STORAGE_BASE_URL
 
@@ -84,13 +88,23 @@ jobs:
           fi
           echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
 
-          for bin in java hdc ohpm hvigorw node; do
+          # OpenHarmony 运行时模式的 hvigor 通过 OHOS_BASE_SDK_HOME 定位 SDK。
+          export OHOS_BASE_SDK_HOME="${OHOS_BASE_SDK_HOME:-$DEVECO_SDK_HOME}"
+          echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME"
+          echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME" >> "$GITHUB_ENV"
+
+          for bin in java hdc ohpm hvigorw node npm; do
             if command -v "$bin" >/dev/null 2>&1; then
               echo "OK   $bin -> $(command -v "$bin")"
             else
               echo "::warning::$bin not found on PATH; the build may fail"
             fi
           done
+
+          # hvigor 与 flutter_tools 都会调用 npm 安装 hvigor 插件，
+          # 这里提前暴露 npm 版本，避免安装失败被静默忽略。
+          node --version
+          npm --version || echo "::warning::npm is not runnable; hvigor plugin install may fail"
 
           java -version
           hdc -v || true

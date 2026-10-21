@@ -9,6 +9,7 @@ import 'package:json5/json5.dart';
 
 import '../base/common.dart';
 import '../base/file_system.dart';
+import '../base/io.dart';
 
 import '../base/utils.dart';
 import '../build_info.dart';
@@ -205,14 +206,32 @@ void installHvigorPlugin(OhosProject ohosProject) {
   packageJsonFile.createSync();
   final String packageJsonContent = const JsonEncoder.withIndent('  ').convert(packageJson);
   packageJsonFile.writeAsStringSync(packageJsonContent);
-  final List<String> command = <String>[
-    'npm',
-    'install',
-  ];
-  globals.processManager.runSync(
-    command,
-    workingDirectory: ohosProject.ohosRoot.path,
-  );
+  // Windows 下 CreateProcess 只识别带扩展名的可执行文件，直接调用 `npm`
+  // 会抛 ProcessException，导致 node_modules 缺失、hvigor 报
+  // "Cannot find module 'flutter-hvigor-plugin'"。因此显式使用 npm.cmd。
+  final List<String> command = <String>['npm', 'install'];
+  if (globals.platform.isWindows) {
+    command[0] = 'npm.cmd';
+  }
+  try {
+    final int exitCode = globals.processManager
+        .runSync(
+          command,
+          workingDirectory: ohosProject.ohosRoot.path,
+        )
+        .exitCode;
+    if (exitCode != 0) {
+      globals.logger.printWarning(
+        'Failed to install the hvigor plugin (npm exit code $exitCode). '
+        'Run "${command.join(' ')}" manually in ${ohosProject.ohosRoot.path}.',
+      );
+    }
+  } on ProcessException catch (error) {
+    globals.logger.printWarning(
+      'Failed to run "${command.join(' ')}": ${error.message}. '
+      'Install the hvigor plugin manually in ${ohosProject.ohosRoot.path}.',
+    );
+  }
 }
 
 bool useHvigorTsBuilder(OhosProject ohosProject) {
