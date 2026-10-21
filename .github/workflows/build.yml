@@ -1,3 +1,4 @@
+# YYC³ OpenHarmony: self-hosted HAP build pipeline.
 name: Build HAP
 
 # Builds a HAP from an in-repo sample project on a self-hosted runner that has

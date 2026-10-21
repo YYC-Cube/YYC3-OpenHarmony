@@ -1,4 +1,5 @@
 # Configuration for Lock Threads - https://github.com/dessant/lock-threads
+# YYC³ OpenHarmony: lock closed issues after inactivity.
 
 name: 'Lock Threads'
 
