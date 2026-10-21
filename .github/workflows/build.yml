@@ -47,6 +47,7 @@ concurrency:
 env:
   PUB_HOSTED_URL: ${{ vars.PUB_HOSTED_URL || 'https://pub.flutter-io.cn' }}
   FLUTTER_STORAGE_BASE_URL: ${{ vars.FLUTTER_STORAGE_BASE_URL || 'https://storage.flutter-io.cn' }}
+  FRAMEWORK_VERSION: ${{ vars.FRAMEWORK_VERSION || '3.22.0' }}
   BUILD_MODE: ${{ inputs.build_mode || 'release' }}
   TARGET_PLATFORM: ${{ inputs.target_platform || 'ohos-arm64' }}
   SAMPLE_PROJECT: ${{ inputs.sample_project || 'examples/hello_world' }}
@@ -61,14 +62,18 @@ jobs:
         uses: actions/checkout@v7
         with:
           clean: true
-          fetch-depth: 0
-          fetch-tags: true
+          fetch-depth: 1
 
       - name: Preflight toolchain
         shell: bash
         run: |
           set -euo pipefail
           echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
+
+          # 浅克隆不会带来可被 git describe 遍历的标签，先在工作区为当前提交打标签，
+          # 让 Flutter 识别出真实框架版本而不是 0.0.0-unknown。
+          git tag -f "$FRAMEWORK_VERSION" HEAD
+          echo "Framework version tag: $FRAMEWORK_VERSION"
 
           echo "$(pwd)/bin" >> "$GITHUB_PATH"
 
