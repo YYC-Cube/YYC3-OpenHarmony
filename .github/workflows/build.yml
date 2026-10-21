@@ -133,11 +133,14 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          # GITHUB_PATH 由 bash 步骤写入的是 POSIX 路径，PowerShell 下不可用，
+          # 因此直接使用工作区内的 flutter.bat。
+          $flutter = Join-Path $env:GITHUB_WORKSPACE 'bin\flutter.bat'
           Set-Location "$env:SAMPLE_PROJECT"
-          flutter pub get
+          & $flutter pub get
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $mode = "--$env:BUILD_MODE"
-          flutter build hap --target-platform $env:TARGET_PLATFORM $mode --no-codesign
+          & $flutter build hap --target-platform $env:TARGET_PLATFORM $mode --no-codesign
           exit $LASTEXITCODE
 
       - name: Build HAP (Unix)
