@@ -27,7 +27,6 @@ REQUIRED_FILES = [
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
     "LICENSE",
-    "version",
     "bin/internal/engine.version",
     "bin/internal/engine.ohos.version",
     "public/yyc3-family.png",
