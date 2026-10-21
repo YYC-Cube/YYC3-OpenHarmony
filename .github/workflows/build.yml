@@ -125,7 +125,23 @@ jobs:
           rm -rf build-artifacts
           mkdir -p build-artifacts
 
-      - name: Build HAP
+      # Windows 下必须用 PowerShell 启动构建：从 Git Bash 启动 flutter 时，
+      # hvigor 的 ohpm 子进程会命中 cmd 的 BATCH RECURSION，
+      # 报 "ohpm install failed"，而同样的命令在 PowerShell 下正常。
+      - name: Build HAP (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location "$env:SAMPLE_PROJECT"
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $mode = "--$env:BUILD_MODE"
+          flutter build hap --target-platform $env:TARGET_PLATFORM $mode --no-codesign
+          exit $LASTEXITCODE
+
+      - name: Build HAP (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
