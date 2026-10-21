@@ -111,7 +111,7 @@ jobs:
           set -euo pipefail
           cd "$SAMPLE_PROJECT"
           flutter pub get
-          flutter build hap --target-platform "$TARGET_PLATFORM" --"$BUILD_MODE"
+          flutter build hap --target-platform "$TARGET_PLATFORM" --"$BUILD_MODE" --no-codesign
 
       - name: Collect artifacts
         shell: bash
