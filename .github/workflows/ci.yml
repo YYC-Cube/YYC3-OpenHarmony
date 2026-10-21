@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - br_3.22.0-ohos-1.0.4
+      - master
+      - main
+  pull_request:
+    branches:
+      - br_3.22.0-ohos-1.0.4
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integrity:
+    name: Repository integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        run: python -m pip install --quiet --disable-pip-version-check pyyaml
+
+      - name: Validate repository integrity
+        run: python .github/scripts/check_integrity.py
+
+  sdk-smoke:
+    name: SDK bootstrap smoke test (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bootstrap Flutter SDK
+        env:
+          PUB_CACHE: ${{ runner.temp }}/pub-cache
+          PUB_HOSTED_URL: https://pub.flutter-io.cn
+          FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
+        run: ./bin/flutter --version

@@ -9,14 +9,14 @@ permissions:
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   lock:
     permissions:
       issues: write
     runs-on: ubuntu-latest
-    if: ${{ github.repository == 'flutter/flutter' }}
     steps:
       - uses: dessant/lock-threads@1bf7ec25051fe7c00bdd17e6a7cf3d7bfb7dc771
         with:
@@ -25,7 +25,5 @@ jobs:
           # Number of days of inactivity before a closed issue is locked.
           issue-inactive-days: '14'
           issue-comment: >
-            This thread has been automatically locked since there has not been
-            any recent activity after it was closed. If you are still experiencing a
-            similar issue, please open a new bug, including the output of
-            `flutter doctor -v` and a minimal reproduction of the issue.
+            该 Issue 关闭后长期无新增动态，已自动锁定。若问题仍然存在，
+            欢迎附带 `flutter doctor -v` 输出与最小复现步骤重新提交 Issue。

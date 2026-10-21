@@ -1,0 +1,159 @@
+name: Build HAP
+
+# Builds a HAP from an in-repo sample project on a self-hosted runner that has
+# the OpenHarmony toolchain installed. The runner must register the labels
+# `self-hosted` and `ohos` (Linux or macOS), and provide:
+#   - JDK 17
+#   - HarmonyOS SDK API 18 with DEVECO_SDK_HOME exported
+#   - command-line-tools 5.1 (ohpm, hvigor, node on PATH)
+#   - hdc on PATH
+# Optional repository variables:
+#   PUB_HOSTED_URL, FLUTTER_STORAGE_BASE_URL
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: Build mode
+        type: choice
+        options:
+          - release
+          - profile
+          - debug
+        default: release
+      target_platform:
+        description: Target platform
+        type: choice
+        options:
+          - ohos-arm64
+          - ohos-x64
+        default: ohos-arm64
+      sample_project:
+        description: Sample project path in this repository
+        type: string
+        default: examples/hello_world
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PUB_HOSTED_URL: ${{ vars.PUB_HOSTED_URL || 'https://pub.flutter-io.cn' }}
+  FLUTTER_STORAGE_BASE_URL: ${{ vars.FLUTTER_STORAGE_BASE_URL || 'https://storage.flutter-io.cn' }}
+  BUILD_MODE: ${{ inputs.build_mode || 'release' }}
+  TARGET_PLATFORM: ${{ inputs.target_platform || 'ohos-arm64' }}
+  SAMPLE_PROJECT: ${{ inputs.sample_project || 'examples/hello_world' }}
+
+jobs:
+  build:
+    name: Build ${{ inputs.build_mode || 'release' }} HAP
+    runs-on: [self-hosted, ohos]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Preflight toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
+
+          echo "$(pwd)/bin" >> "$GITHUB_PATH"
+
+          : "${DEVECO_SDK_HOME:?DEVECO_SDK_HOME must be exported on the runner}"
+          if [ ! -d "$DEVECO_SDK_HOME" ]; then
+            echo "::error::DEVECO_SDK_HOME does not exist: $DEVECO_SDK_HOME"
+            exit 1
+          fi
+          echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
+
+          for bin in java hdc ohpm hvigorw node; do
+            if command -v "$bin" >/dev/null 2>&1; then
+              echo "OK   $bin -> $(command -v "$bin")"
+            else
+              echo "::warning::$bin not found on PATH; the build may fail"
+            fi
+          done
+
+          java -version
+          hdc -v || true
+
+          ./bin/flutter --version
+
+      - name: Flutter doctor
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./bin/flutter doctor -v || true
+
+      - name: Clean stale build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$SAMPLE_PROJECT/ohos/entry/build" "$SAMPLE_PROJECT/ohos/build" "$SAMPLE_PROJECT/.dart_tool"
+          rm -rf build-artifacts
+          mkdir -p build-artifacts
+
+      - name: Build HAP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SAMPLE_PROJECT"
+          flutter pub get
+          flutter build hap --target-platform "$TARGET_PLATFORM" --"$BUILD_MODE"
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          haps=$(find "$SAMPLE_PROJECT/ohos" -type f -name '*.hap' | sort)
+          if [ -z "$haps" ]; then
+            echo "::error::No HAP artifact found under $SAMPLE_PROJECT/ohos"
+            exit 1
+          fi
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha_cmd="sha256sum"
+          else
+            sha_cmd="shasum -a 256"
+          fi
+
+          {
+            echo "## YYC³ OpenHarmony HAP build"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Mode | ${BUILD_MODE} |"
+            echo "| Target | ${TARGET_PLATFORM} |"
+            echo "| Sample | ${SAMPLE_PROJECT} |"
+            echo "| Commit | ${GITHUB_SHA} |"
+            echo ""
+            echo "| Artifact | Size | SHA-256 |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "$haps" | while IFS= read -r hap; do
+            cp "$hap" build-artifacts/
+            name=$(basename "$hap")
+            size=$(du -h "$hap" | cut -f1)
+            sha=$($sha_cmd "$hap" | cut -d' ' -f1)
+            echo "| \`$name\` | $size | \`$sha\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload HAP
+        uses: actions/upload-artifact@v4
+        with:
+          name: hap-${{ env.BUILD_MODE }}-${{ env.TARGET_PLATFORM }}
+          path: build-artifacts/*.hap
+          if-no-files-found: error
+          retention-days: 14

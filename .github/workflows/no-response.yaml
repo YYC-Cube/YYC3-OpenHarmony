@@ -17,23 +17,18 @@ permissions:
 jobs:
   noResponse:
     runs-on: ubuntu-latest
-    if: ${{ github.repository == 'flutter/flutter' }}
     steps:
       - uses: godofredoc/no-response@0ce2dc0e63e1c7d2b87752ceed091f6d32c9df09
         with:
           token: ${{ github.token }}
           # Comment to post when closing an Issue for lack of response. Set to `false` to disable
           closeComment: >
-            Without additional information, we are unfortunately not sure how to
-            resolve this issue. We are therefore reluctantly going to close this
-            bug for now.
+            由于缺少必要信息，我们暂时无法定位并解决该问题，因此将暂时关闭此 Issue。
 
-            If you find this problem please file a new issue with the same description,
-            what happens, logs and the output of 'flutter doctor -v'. All system setups
-            can be slightly different so it's always better to open new issues and reference
-            the related ones.
+            如问题仍然存在，欢迎携带完整描述、复现步骤、日志以及 `flutter doctor -v`
+            输出重新提交 Issue，并引用相关历史 Issue。
 
-            Thanks for your contribution.
+            感谢您的反馈与贡献。
           # Number of days of inactivity before an issue is closed for lack of response.
           daysUntilClose: 21
           # Label requiring a response.
