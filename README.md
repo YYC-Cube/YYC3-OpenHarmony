@@ -59,7 +59,8 @@ YYC³ OpenHarmony 是面向 OpenHarmony 生态的 Flutter SDK 兼容拓展仓库
 | Flutter Engine（OHOS） | `2317265cd53ac33c71f76ecc22cc06d97309b6db` | OpenHarmony 适配引擎提交 |
 | Dart SDK | 3.4.0 | 随 Flutter 3.22.0 配套 |
 | DevTools | 2.34.1 | 调试与性能分析工具 |
-| HarmonyOS SDK | API 18 | 配套 DevEco Studio 5.1 或 command-line-tools 5.1 |
+| OpenHarmony SDK | API 20 | 默认目标（`runtimeOS=OpenHarmony`），CI 已验证 |
+| HarmonyOS SDK | 5.1.0（API 18） | HarmonyOS NEXT 目标（`runtimeOS=HarmonyOS`），需 `openharmony` + `hms` 双组件 |
 | JDK | 17 | 构建工具链依赖 |
 
 ## 仓库结构
@@ -87,9 +88,10 @@ YYC3-OpenHarmony/
 
 | 依赖 | 要求 |
 | --- | --- |
-| 开发系统 | Linux / macOS / Windows |
-| HarmonyOS SDK | API 18 |
-| IDE / 命令行工具 | DevEco Studio 5.1 或 command-line-tools 5.1（推荐 5.1.0 Beta1 及以上） |
+| 开发系统 | Windows（已验证）/ Linux / macOS |
+| OpenHarmony SDK | API 20（默认目标，`DEVECO_SDK_HOME` 指向 SDK 根目录） |
+| HarmonyOS SDK | 5.1.0 / API 18（HarmonyOS NEXT 目标，需同时安装 `openharmony` 与 `hms` 组件） |
+| IDE / 命令行工具 | DevEco Studio 5.1+ 或 command-line-tools 5.1（`ohpm`、`hvigor`、`node`、`npm` 在 PATH） |
 | JDK | 17 |
 
 **请从[鸿蒙 SDK](https://developer.huawei.com/consumer/cn/develop)下载配套开发工具。**
@@ -240,14 +242,37 @@ flutter build app --release
 
 | 依赖 | 要求 |
 | --- | --- |
-| 操作系统 | Linux 或 macOS（需 bash） |
+| 操作系统 | Windows（已验证）/ Linux / macOS |
 | JDK | 17 |
-| HarmonyOS SDK | API 18，并导出 `DEVECO_SDK_HOME` |
-| 命令行工具 | command-line-tools 5.1（`ohpm`、`hvigor`、`node` 在 PATH） |
+| OpenHarmony SDK | API 20，并导出 `DEVECO_SDK_HOME`（可选 `OHOS_BASE_SDK_HOME`） |
+| HarmonyOS SDK | 5.1.0 / API 18，`<sdk>/<api>/` 下同时含 `openharmony` 与 `hms` |
+| 命令行工具 | command-line-tools 5.1（`ohpm`、`hvigor`、`node`、`npm` 在 PATH） |
 | 设备工具 | `hdc` 在 PATH |
-| 可选仓库变量 | `PUB_HOSTED_URL`、`FLUTTER_STORAGE_BASE_URL` |
+| 可选仓库变量 | `PUB_HOSTED_URL`、`FLUTTER_STORAGE_BASE_URL`、`FRAMEWORK_VERSION`、`OPENHARMONY_API`、`ENABLE_HARMONYOS_TARGET` |
 
-触发方式：`workflow_dispatch` 手动选择 `release` / `profile` / `debug`、`ohos-arm64` / `ohos-x64` 与示例工程；推送 `v*` 标签时自动执行 release 构建。
+> Windows Runner 注意：系统级 `npm.cmd` 若被 pnpm 垫片覆盖，`hvigorw` 与 Flutter 的 hvigor 插件安装都会失败。请确保 PATH 中最先出现的 Node 来自完整安装（例如 DevEco 自带 `tools/node`），并设置 `NODE_HOME`。
+
+### 双目标构建矩阵
+
+`build.yml` 负责分发，`build-hap.yml` 为可复用工作流，按 `target_os` 切换示例工程配置：
+
+| 目标 | runtimeOS | SDK | 示例配置来源 |
+| --- | --- | --- | --- |
+| `openharmony` | OpenHarmony | API 20（`compileSdkVersion`/`targetSdkVersion`/`compatibleSdkVersion` = 20） | 仓库内 `build-profile.json5` |
+| `harmonyos` | HarmonyOS | 5.1.0(18) | `build-profile.harmonyos.json5` 等三个同名变体 |
+
+触发方式：`workflow_dispatch` 选择 `target_os`（`both` / `openharmony` / `harmonyos`）、`release` / `profile` / `debug`、`ohos-arm64` / `ohos-x64` 与示例工程；推送 `v*` 标签时按 `both` 执行。
+
+- HarmonyOS NEXT 分支默认关闭：安装 HarmonyOS SDK 后，设置仓库变量 `ENABLE_HARMONYOS_TARGET=true` 才会执行；未开启时会有一条显式 warning，不会产生“假绿”。
+- 产物命名：`hap-<target_os>-<mode>-<platform>`，压缩包内附 `SHA256SUMS`，运行摘要同时记录 commit、大小与 SHA-256。
+
+### 签名与验收状态
+
+当前流水线以 `--no-codesign` 构建，产物为 **unsigned HAP**，仅用于编译验证，**不能直接安装到设备**。生产交付还需补齐：
+
+1. 签名材料（HarmonyOS NEXT 需 AGC 证书/profile；OpenHarmony 需对应签名证书），通过 Secrets 注入或使用 `hap-sign-tool` 在构建后签名；
+2. 真机/模拟器验收：`hdc install` + 启动冒烟，作为发布阻断条件；
+3. 产物证明：签名后重新生成 SHA-256 并归档，必要时增加 SBOM 与构建来源证明。
 
 ### 五维质量审计基线
 

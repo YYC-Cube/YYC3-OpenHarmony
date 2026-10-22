@@ -1,0 +1,232 @@
+# Reusable HAP build pipeline (invoked by build.yml).
+#
+# Two target profiles are supported:
+#   - openharmony: runtimeOS "OpenHarmony", SDK API 20 (examples/hello_world default)
+#   - harmonyos:   runtimeOS "HarmonyOS", SDK 5.1.0(18) (HarmonyOS NEXT)
+#
+# The caller selects the target; this workflow swaps the sample's OHOS
+# build-profile/module config before building, validates that the matching SDK
+# components are installed, and publishes an unsigned HAP with checksums.
+name: Build HAP (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      target_os:
+        description: Target platform profile (openharmony or harmonyos)
+        type: string
+        required: true
+      build_mode:
+        description: Build mode (debug, profile, release)
+        type: string
+        default: release
+      target_platform:
+        description: Target platform (ohos-arm64 or ohos-x64)
+        type: string
+        default: ohos-arm64
+      sample_project:
+        description: Sample project path in this repository
+        type: string
+        default: examples/hello_world
+
+permissions:
+  contents: read
+
+env:
+  PUB_HOSTED_URL: ${{ vars.PUB_HOSTED_URL || 'https://pub.flutter-io.cn' }}
+  FLUTTER_STORAGE_BASE_URL: ${{ vars.FLUTTER_STORAGE_BASE_URL || 'https://storage.flutter-io.cn' }}
+  FRAMEWORK_VERSION: ${{ vars.FRAMEWORK_VERSION || '3.22.0' }}
+  OPENHARMONY_API: ${{ vars.OPENHARMONY_API || '20' }}
+  BUILD_MODE: ${{ inputs.build_mode }}
+  TARGET_PLATFORM: ${{ inputs.target_platform }}
+  TARGET_OS: ${{ inputs.target_os }}
+  SAMPLE_PROJECT: ${{ inputs.sample_project }}
+
+jobs:
+  build:
+    name: Build ${{ inputs.target_os }} ${{ inputs.build_mode }} HAP
+    runs-on: [self-hosted, ohos]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Preflight toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
+          echo "Target profile: ${TARGET_OS}"
+
+          # 浅克隆不会带来可被 git describe 遍历的标签，先在工作区为当前提交打标签，
+          # 让 Flutter 识别出真实框架版本而不是 0.0.0-unknown。
+          git tag -f "$FRAMEWORK_VERSION" HEAD
+          echo "Framework version tag: $FRAMEWORK_VERSION"
+
+          echo "$(pwd)/bin" >> "$GITHUB_PATH"
+
+          : "${DEVECO_SDK_HOME:?DEVECO_SDK_HOME must be exported on the runner}"
+          if [ ! -d "$DEVECO_SDK_HOME" ]; then
+            echo "::error::DEVECO_SDK_HOME does not exist: $DEVECO_SDK_HOME"
+            exit 1
+          fi
+          echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
+
+          if [ "$TARGET_OS" = "harmonyos" ]; then
+            # HarmonyOS NEXT 使用 hms + openharmony 组件，二者必须同时存在。
+            sdk_root=""
+            for d in "$DEVECO_SDK_HOME"/*/; do
+              if [ -d "${d}openharmony/ets" ] && [ -d "${d}hms/ets" ]; then
+                sdk_root="$d"
+                break
+              fi
+            done
+            if [ -z "$sdk_root" ]; then
+              echo "::error::HarmonyOS NEXT SDK components are missing under $DEVECO_SDK_HOME"
+              echo "Required layout: <sdk>/<api>/openharmony/ets and <sdk>/<api>/hms/ets"
+              echo "Install the HarmonyOS SDK (5.1.0 / API 18) with DevEco Studio SDK Manager, then re-run."
+              exit 1
+            fi
+            echo "HarmonyOS SDK: $sdk_root"
+          else
+            export OHOS_BASE_SDK_HOME="${OHOS_BASE_SDK_HOME:-$DEVECO_SDK_HOME}"
+            if [ ! -f "$OHOS_BASE_SDK_HOME/$OPENHARMONY_API/ets/oh-uni-package.json" ]; then
+              echo "::error::OpenHarmony SDK API $OPENHARMONY_API not found under $OHOS_BASE_SDK_HOME"
+              echo "Install OpenHarmony SDK API $OPENHARMONY_API or set repository variable OPENHARMONY_API."
+              exit 1
+            fi
+            echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME"
+            echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME" >> "$GITHUB_ENV"
+          fi
+
+          for bin in java hdc ohpm hvigorw node npm; do
+            if command -v "$bin" >/dev/null 2>&1; then
+              echo "OK   $bin -> $(command -v "$bin")"
+            else
+              echo "::warning::$bin not found on PATH; the build may fail"
+            fi
+          done
+
+          node --version
+          npm --version || echo "::warning::npm is not runnable; hvigor plugin install may fail"
+
+          java -version
+          hdc -v || true
+
+          ./bin/flutter --version
+
+      - name: Flutter doctor
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./bin/flutter doctor -v || true
+
+      - name: Select target configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          ohos="$SAMPLE_PROJECT/ohos"
+          if [ "$TARGET_OS" = "harmonyos" ]; then
+            cp "$ohos/build-profile.harmonyos.json5" "$ohos/build-profile.json5"
+            cp "$ohos/entry/build-profile.harmonyos.json5" "$ohos/entry/build-profile.json5"
+            cp "$ohos/entry/src/main/module.harmonyos.json5" "$ohos/entry/src/main/module.json5"
+            echo "Applied HarmonyOS NEXT configuration (runtimeOS=HarmonyOS, 5.1.0(18))"
+          else
+            git checkout -- "$ohos/build-profile.json5" \
+              "$ohos/entry/build-profile.json5" \
+              "$ohos/entry/src/main/module.json5"
+            echo "Using committed OpenHarmony configuration (runtimeOS=OpenHarmony, API $OPENHARMONY_API)"
+          fi
+
+      - name: Clean stale build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$SAMPLE_PROJECT/ohos/entry/build" "$SAMPLE_PROJECT/ohos/build" "$SAMPLE_PROJECT/.dart_tool"
+          rm -rf build-artifacts
+          mkdir -p build-artifacts
+
+      # Windows 下必须用 PowerShell 启动构建：从 Git Bash 启动 flutter 时，
+      # hvigor 的 ohpm 子进程会命中 cmd 的 BATCH RECURSION，
+      # 报 "ohpm install failed"，而同样的命令在 PowerShell 下正常。
+      - name: Build HAP (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # GITHUB_PATH 由 bash 步骤写入的是 POSIX 路径，PowerShell 下不可用，
+          # 因此直接使用工作区内的 flutter.bat。
+          $flutter = Join-Path $env:GITHUB_WORKSPACE 'bin\flutter.bat'
+          Set-Location "$env:SAMPLE_PROJECT"
+          & $flutter pub get
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $mode = "--$env:BUILD_MODE"
+          # 当前流水线不注入签名材料，产物为 unsigned（见 README「签名与验收」）。
+          & $flutter build hap --target-platform $env:TARGET_PLATFORM $mode --no-codesign
+          exit $LASTEXITCODE
+
+      - name: Build HAP (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SAMPLE_PROJECT"
+          flutter pub get
+          flutter build hap --target-platform "$TARGET_PLATFORM" --"$BUILD_MODE" --no-codesign
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          haps=$(find "$SAMPLE_PROJECT/ohos" -type f -name '*.hap' | sort)
+          if [ -z "$haps" ]; then
+            echo "::error::No HAP artifact found under $SAMPLE_PROJECT/ohos"
+            exit 1
+          fi
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha_cmd="sha256sum"
+          else
+            sha_cmd="shasum -a 256"
+          fi
+
+          short_sha=$(echo "$GITHUB_SHA" | cut -c1-12)
+          : > build-artifacts/SHA256SUMS
+
+          {
+            echo "## YYC³ OpenHarmony HAP build"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Target OS | ${TARGET_OS} |"
+            echo "| Mode | ${BUILD_MODE} |"
+            echo "| Target | ${TARGET_PLATFORM} |"
+            echo "| Sample | ${SAMPLE_PROJECT} |"
+            echo "| Commit | ${short_sha} |"
+            echo "| Signing | UNSIGNED (deploy requires signing, see README) |"
+            echo ""
+            echo "| Artifact | Size | SHA-256 |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "$haps" | while IFS= read -r hap; do
+            cp "$hap" build-artifacts/
+            name=$(basename "$hap")
+            size=$(du -h "$hap" | cut -f1)
+            sha=$($sha_cmd "$hap" | cut -d' ' -f1)
+            echo "$sha  $name" >> build-artifacts/SHA256SUMS
+            echo "| \`$name\` | $size | \`$sha\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload HAP
+        uses: actions/upload-artifact@v7
+        with:
+          name: hap-${{ inputs.target_os }}-${{ inputs.build_mode }}-${{ inputs.target_platform }}
+          path: |
+            build-artifacts/*.hap
+            build-artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

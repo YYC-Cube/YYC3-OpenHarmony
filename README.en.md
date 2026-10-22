@@ -59,7 +59,8 @@ YYC³ OpenHarmony is a compatible extension of the Flutter SDK for the OpenHarmo
 | Flutter Engine (OHOS) | `2317265cd53ac33c71f76ecc22cc06d97309b6db` | OpenHarmony adapted engine commit |
 | Dart SDK | 3.4.0 | Bundled with Flutter 3.22.0 |
 | DevTools | 2.34.1 | Debugging and profiling tools |
-| HarmonyOS SDK | API 18 | DevEco Studio 5.1 or command-line-tools 5.1 |
+| OpenHarmony SDK | API 20 | Default target (`runtimeOS=OpenHarmony`), verified in CI |
+| HarmonyOS SDK | 5.1.0 (API 18) | HarmonyOS NEXT target (`runtimeOS=HarmonyOS`), requires both `openharmony` and `hms` components |
 | JDK | 17 | Required by the build toolchain |
 
 ## Repository layout
@@ -87,9 +88,10 @@ YYC3-OpenHarmony/
 
 | Dependency | Requirement |
 | --- | --- |
-| Development OS | Linux / macOS / Windows |
-| HarmonyOS SDK | API 18 |
-| IDE / CLI tools | DevEco Studio 5.1 or command-line-tools 5.1 (5.1.0 Beta1 or later recommended) |
+| Development OS | Windows (verified) / Linux / macOS |
+| OpenHarmony SDK | API 20 (default target; `DEVECO_SDK_HOME` points at the SDK root) |
+| HarmonyOS SDK | 5.1.0 / API 18 (HarmonyOS NEXT target; requires both `openharmony` and `hms` components) |
+| IDE / CLI tools | DevEco Studio 5.1+ or command-line-tools 5.1 (`ohpm`, `hvigor`, `node`, `npm` on PATH) |
 | JDK | 17 |
 
 **Download the matching development tools from the [HarmonyOS SDK](https://developer.huawei.com/consumer/cn/develop).**
@@ -238,14 +240,37 @@ See also: [Flutter third-party library adaptation plan](https://docs.qq.com/shee
 
 | Dependency | Requirement |
 | --- | --- |
-| OS | Linux or macOS (bash required) |
+| OS | Windows (verified) / Linux / macOS |
 | JDK | 17 |
-| HarmonyOS SDK | API 18 with `DEVECO_SDK_HOME` exported |
-| CLI tools | command-line-tools 5.1 (`ohpm`, `hvigor`, `node` on PATH) |
+| OpenHarmony SDK | API 20 with `DEVECO_SDK_HOME` exported (optionally `OHOS_BASE_SDK_HOME`) |
+| HarmonyOS SDK | 5.1.0 / API 18 with both `openharmony` and `hms` under `<sdk>/<api>/` |
+| CLI tools | command-line-tools 5.1 (`ohpm`, `hvigor`, `node`, `npm` on PATH) |
 | Device tooling | `hdc` on PATH |
-| Optional repository variables | `PUB_HOSTED_URL`, `FLUTTER_STORAGE_BASE_URL` |
+| Optional repository variables | `PUB_HOSTED_URL`, `FLUTTER_STORAGE_BASE_URL`, `FRAMEWORK_VERSION`, `OPENHARMONY_API`, `ENABLE_HARMONYOS_TARGET` |
 
-Triggers: `workflow_dispatch` with selectable `release` / `profile` / `debug`, `ohos-arm64` / `ohos-x64`, and sample project; pushing a `v*` tag builds release automatically.
+> Windows runner note: if the system `npm.cmd` is replaced by a pnpm shim, both `hvigorw` and the Flutter hvigor plugin install fail. Make sure the first Node on PATH comes from an intact installation (for example DevEco's bundled `tools/node`) and set `NODE_HOME`.
+
+### Dual-target build matrix
+
+`build.yml` dispatches; `build-hap.yml` is the reusable workflow that swaps the sample configuration per `target_os`:
+
+| Target | runtimeOS | SDK | Sample configuration |
+| --- | --- | --- | --- |
+| `openharmony` | OpenHarmony | API 20 (`compileSdkVersion`/`targetSdkVersion`/`compatibleSdkVersion` = 20) | Committed `build-profile.json5` |
+| `harmonyos` | HarmonyOS | 5.1.0(18) | `build-profile.harmonyos.json5` and its two sibling variants |
+
+Triggers: `workflow_dispatch` with `target_os` (`both` / `openharmony` / `harmonyos`), `release` / `profile` / `debug`, `ohos-arm64` / `ohos-x64`, and sample project; pushing a `v*` tag runs both targets.
+
+- The HarmonyOS NEXT leg is opt-in: after installing the HarmonyOS SDK, set the repository variable `ENABLE_HARMONYOS_TARGET=true`. When disabled, the run emits an explicit warning instead of a false green.
+- Artifact naming: `hap-<target_os>-<mode>-<platform>`; the archive includes `SHA256SUMS`, and the run summary records commit, size, and SHA-256.
+
+### Signing and acceptance status
+
+The pipeline currently builds with `--no-codesign`, so artifacts are **unsigned HAPs** intended for compile validation only and **cannot be installed on a device**. Production delivery still requires:
+
+1. Signing material (AGC certificate/profile for HarmonyOS NEXT; the matching certificate for OpenHarmony), injected via Secrets or applied afterwards with `hap-sign-tool`.
+2. Device or emulator acceptance: `hdc install` plus a launch smoke test, used as a release gate.
+3. Artifact provenance: recompute SHA-256 after signing, and add SBOM plus build provenance when required.
 
 ### Five-dimensional quality baseline
 
