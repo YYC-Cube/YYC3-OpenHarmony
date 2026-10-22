@@ -1,9 +1,12 @@
-# YYC³ OpenHarmony: self-hosted HAP build pipeline.
-name: Build HAP
-
-# Builds a HAP from an in-repo sample project on a self-hosted runner that has
-# the OpenHarmony toolchain installed. The runner must register the labels
-# `self-hosted` and `ohos` (Windows, Linux or macOS), and provide:
+# YYC³ OpenHarmony: self-hosted HAP build entry point.
+#
+# Dual-target dispatch:
+#   - openharmony: OpenHarmony runtime, SDK API 20 (verified on this runner)
+#   - harmonyos:   HarmonyOS NEXT runtime, SDK 5.1.0(18) (requires HarmonyOS SDK
+#                  components + repository variable ENABLE_HARMONYOS_TARGET=true)
+#
+# The actual build steps live in build-hap.yml (reusable workflow).
+# The runner must register the labels `self-hosted` and `ohos`, and provide:
 #   - JDK 17
 #   - OpenHarmony SDK API 20 with DEVECO_SDK_HOME (and optionally
 #     OHOS_BASE_SDK_HOME) exported
@@ -13,11 +16,22 @@ name: Build HAP
 # Node.js installation; a `npm.cmd` shim that redirects to pnpm breaks both
 # `hvigorw` and the Flutter tool's hvigor plugin install.
 # Optional repository variables:
-#   PUB_HOSTED_URL, FLUTTER_STORAGE_BASE_URL
+#   PUB_HOSTED_URL, FLUTTER_STORAGE_BASE_URL, FRAMEWORK_VERSION,
+#   OPENHARMONY_API, ENABLE_HARMONYOS_TARGET
+
+name: Build HAP
 
 on:
   workflow_dispatch:
     inputs:
+      target_os:
+        description: Target platform profile
+        type: choice
+        options:
+          - both
+          - openharmony
+          - harmonyos
+        default: both
       build_mode:
         description: Build mode
         type: choice
@@ -48,152 +62,32 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  PUB_HOSTED_URL: ${{ vars.PUB_HOSTED_URL || 'https://pub.flutter-io.cn' }}
-  FLUTTER_STORAGE_BASE_URL: ${{ vars.FLUTTER_STORAGE_BASE_URL || 'https://storage.flutter-io.cn' }}
-  FRAMEWORK_VERSION: ${{ vars.FRAMEWORK_VERSION || '3.22.0' }}
-  BUILD_MODE: ${{ inputs.build_mode || 'release' }}
-  TARGET_PLATFORM: ${{ inputs.target_platform || 'ohos-arm64' }}
-  SAMPLE_PROJECT: ${{ inputs.sample_project || 'examples/hello_world' }}
-
 jobs:
-  build:
-    name: Build ${{ inputs.build_mode || 'release' }} HAP
-    runs-on: [self-hosted, ohos]
-    timeout-minutes: 60
+  build-openharmony:
+    name: Build OpenHarmony HAP
+    if: ${{ (inputs.target_os || 'both') != 'harmonyos' }}
+    uses: ./.github/workflows/build-hap.yml
+    with:
+      target_os: openharmony
+      build_mode: ${{ inputs.build_mode || 'release' }}
+      target_platform: ${{ inputs.target_platform || 'ohos-arm64' }}
+      sample_project: ${{ inputs.sample_project || 'examples/hello_world' }}
+
+  build-harmonyos:
+    name: Build HarmonyOS NEXT HAP
+    if: ${{ (inputs.target_os || 'both') != 'openharmony' && vars.ENABLE_HARMONYOS_TARGET == 'true' }}
+    uses: ./.github/workflows/build-hap.yml
+    with:
+      target_os: harmonyos
+      build_mode: ${{ inputs.build_mode || 'release' }}
+      target_platform: ${{ inputs.target_platform || 'ohos-arm64' }}
+      sample_project: ${{ inputs.sample_project || 'examples/hello_world' }}
+
+  harmonyos-notice:
+    name: HarmonyOS NEXT leg status
+    if: ${{ (inputs.target_os || 'both') != 'openharmony' && vars.ENABLE_HARMONYOS_TARGET != 'true' }}
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          clean: true
-          fetch-depth: 1
-
-      - name: Preflight toolchain
-        shell: bash
+      - name: Explain skipped HarmonyOS NEXT leg
         run: |
-          set -euo pipefail
-          echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
-
-          # 浅克隆不会带来可被 git describe 遍历的标签，先在工作区为当前提交打标签，
-          # 让 Flutter 识别出真实框架版本而不是 0.0.0-unknown。
-          git tag -f "$FRAMEWORK_VERSION" HEAD
-          echo "Framework version tag: $FRAMEWORK_VERSION"
-
-          echo "$(pwd)/bin" >> "$GITHUB_PATH"
-
-          : "${DEVECO_SDK_HOME:?DEVECO_SDK_HOME must be exported on the runner}"
-          if [ ! -d "$DEVECO_SDK_HOME" ]; then
-            echo "::error::DEVECO_SDK_HOME does not exist: $DEVECO_SDK_HOME"
-            exit 1
-          fi
-          echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
-
-          # OpenHarmony 运行时模式的 hvigor 通过 OHOS_BASE_SDK_HOME 定位 SDK。
-          export OHOS_BASE_SDK_HOME="${OHOS_BASE_SDK_HOME:-$DEVECO_SDK_HOME}"
-          echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME"
-          echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME" >> "$GITHUB_ENV"
-
-          for bin in java hdc ohpm hvigorw node npm; do
-            if command -v "$bin" >/dev/null 2>&1; then
-              echo "OK   $bin -> $(command -v "$bin")"
-            else
-              echo "::warning::$bin not found on PATH; the build may fail"
-            fi
-          done
-
-          # hvigor 与 flutter_tools 都会调用 npm 安装 hvigor 插件，
-          # 这里提前暴露 npm 版本，避免安装失败被静默忽略。
-          node --version
-          npm --version || echo "::warning::npm is not runnable; hvigor plugin install may fail"
-
-          java -version
-          hdc -v || true
-
-          ./bin/flutter --version
-
-      - name: Flutter doctor
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./bin/flutter doctor -v || true
-
-      - name: Clean stale build output
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf "$SAMPLE_PROJECT/ohos/entry/build" "$SAMPLE_PROJECT/ohos/build" "$SAMPLE_PROJECT/.dart_tool"
-          rm -rf build-artifacts
-          mkdir -p build-artifacts
-
-      # Windows 下必须用 PowerShell 启动构建：从 Git Bash 启动 flutter 时，
-      # hvigor 的 ohpm 子进程会命中 cmd 的 BATCH RECURSION，
-      # 报 "ohpm install failed"，而同样的命令在 PowerShell 下正常。
-      - name: Build HAP (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # GITHUB_PATH 由 bash 步骤写入的是 POSIX 路径，PowerShell 下不可用，
-          # 因此直接使用工作区内的 flutter.bat。
-          $flutter = Join-Path $env:GITHUB_WORKSPACE 'bin\flutter.bat'
-          Set-Location "$env:SAMPLE_PROJECT"
-          & $flutter pub get
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $mode = "--$env:BUILD_MODE"
-          & $flutter build hap --target-platform $env:TARGET_PLATFORM $mode --no-codesign
-          exit $LASTEXITCODE
-
-      - name: Build HAP (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$SAMPLE_PROJECT"
-          flutter pub get
-          flutter build hap --target-platform "$TARGET_PLATFORM" --"$BUILD_MODE" --no-codesign
-
-      - name: Collect artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-          haps=$(find "$SAMPLE_PROJECT/ohos" -type f -name '*.hap' | sort)
-          if [ -z "$haps" ]; then
-            echo "::error::No HAP artifact found under $SAMPLE_PROJECT/ohos"
-            exit 1
-          fi
-
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha_cmd="sha256sum"
-          else
-            sha_cmd="shasum -a 256"
-          fi
-
-          {
-            echo "## YYC³ OpenHarmony HAP build"
-            echo ""
-            echo "| Item | Value |"
-            echo "| --- | --- |"
-            echo "| Mode | ${BUILD_MODE} |"
-            echo "| Target | ${TARGET_PLATFORM} |"
-            echo "| Sample | ${SAMPLE_PROJECT} |"
-            echo "| Commit | ${GITHUB_SHA} |"
-            echo ""
-            echo "| Artifact | Size | SHA-256 |"
-            echo "| --- | --- | --- |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          echo "$haps" | while IFS= read -r hap; do
-            cp "$hap" build-artifacts/
-            name=$(basename "$hap")
-            size=$(du -h "$hap" | cut -f1)
-            sha=$($sha_cmd "$hap" | cut -d' ' -f1)
-            echo "| \`$name\` | $size | \`$sha\` |" >> "$GITHUB_STEP_SUMMARY"
-          done
-
-      - name: Upload HAP
-        uses: actions/upload-artifact@v7
-        with:
-          name: hap-${{ env.BUILD_MODE }}-${{ env.TARGET_PLATFORM }}
-          path: build-artifacts/*.hap
-          if-no-files-found: error
-          retention-days: 14
+          echo "::warning::HarmonyOS NEXT leg was skipped: install the HarmonyOS SDK (5.1.0 / API 18) with DevEco Studio SDK Manager, then set the repository variable ENABLE_HARMONYOS_TARGET=true and re-run."
